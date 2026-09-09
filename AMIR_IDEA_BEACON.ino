@@ -1,33 +1,3 @@
-/*
- AMIR IDEA BEACON ULTIMATE LITE
- XIAO ESP32-C3 + 1.3" 128x64 OLED
- ------------------------------------------------------------
- This version keeps the important features but is optimized
- to fit the default 1,310,720-byte application partition.
-
- Library:
-   U8g2 by oliver
-
- Board:
-   Seeed Studio XIAO ESP32C3
-
- Wiring:
-   OLED VCC -> 3V3
-   OLED GND -> GND
-   OLED SDA -> SDA
-   OLED SCL -> SCL
-
- Guest:
-   Wi-Fi: Amir-Message
-   http://10.77.0.1/
-
- Admin:
-   http://10.77.0.1/a7K9m2Q4x8
-   PIN: 7391
-
- IMPORTANT:
-   Change ADMIN_PATH and ADMIN_PIN before public use.
-*/
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -377,19 +347,18 @@ bool needAdmin(){ if(adminOK()) return true; server.send(403,"text/plain","Forbi
 // HTML/CSS intentionally compact to save flash.
 
 const char PAGE_TOP[] PROGMEM =
-"<!doctype html><html lang=de><head><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-"<style>*{box-sizing:border-box}body{margin:0;padding:18px;background:#08111f;color:#eef;font:16px Arial}.c{max-width:650px;margin:15px auto;background:#142033;padding:18px;border-radius:18px}"
-"h1,h2{margin-top:0}input,textarea,button{width:100%;padding:12px;margin-top:9px;border:0;border-radius:10px;font:inherit}textarea{min-height:105px}"
-"button{background:#2672ff;color:#fff;font-weight:bold}.g{background:#087f5b}.r{background:#b42318}.d{background:#39465a}.m,.q{background:#08111f;padding:10px;margin-top:8px;border-radius:10px}"
-".row{display:grid;grid-template-columns:1fr auto;gap:8px}.row button{width:auto;margin:0}.ok{background:#075c45;padding:12px;border-radius:10px}.warn{background:#7a3e00;padding:12px;border-radius:10px}"
-"small{color:#9badc8}</style></head><body>";
+"<!doctype html><html lang=de><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+"<style>body{margin:0;padding:14px;background:#091321;color:#eef;font:16px Arial}.c{max-width:640px;margin:12px auto;background:#16243a;padding:15px;border-radius:14px}"
+"input,textarea,button{box-sizing:border-box;width:100%;padding:11px;margin-top:8px;border:0;border-radius:9px;font:inherit}textarea{min-height:95px}button{background:#2672ff;color:white;font-weight:bold}"
+".g{background:#087f5b}.r{background:#b42318}.d{background:#40506a}.m,.q{background:#08111f;padding:9px;margin-top:7px;border-radius:9px}.row{display:grid;grid-template-columns:1fr auto;gap:7px}.row button{width:auto;margin:0}"
+".ok{background:#075c45;padding:10px}.warn{background:#7a3e00;padding:10px}small{color:#aab8cd}</style><body>";
 
 String guestPage(const String& note=""){
   String p=FPSTR(PAGE_TOP);
-  p+="<div class=c><h1>Hast du eine Idee?</h1><p>Was würdest du verbessern oder anders machen? Schreib es Amir.</p>";
+  p+="<div class=c><h1>Hast du eine Idee?</h1><p>Schick Amir deine beste Idee.</p>";
   p+=note;
   p+="<form method=post action=/idea><input name=name maxlength=40 placeholder='Name (optional)'><textarea name=idea maxlength=180 placeholder='Deine Idee...' required></textarea>"
-     "<button>Idee an Amir senden</button></form><p><small>Nach dem Senden erscheint deine Idee kurz auf dem OLED.</small></p></div></body></html>";
+     "<button>Idee an Amir senden</button></form><p><small>Deine Idee erscheint gleich auf dem OLED.</small></p></div></body></html>";
   return p;
 }
 
@@ -407,14 +376,14 @@ String adminPage(){
   String p=FPSTR(PAGE_TOP);
   p.reserve(11000);
 
-  p+="<div class=c><h1>AMIR IDEA BEACON</h1><div class=q><b>";
+  p+="<div class=c><h1>AMIR IDEA</h1><div class=q><b>";
   p+=esc(quotes[currentQuote].text);
   p+="</b><br><small>— "+esc(quotes[currentQuote].author)+"</small></div>"
-     "<form method=post action=/admin/next><button class=g>Nächster Spruch</button></form>"
-     "<form method=post action=/admin/test><button>OLED-Ideenalarm testen</button></form></div>";
+     "<form method=post action=/admin/next><button class=g>Nächster</button></form>"
+     "</div>";
 
   p+="<div class=c><h2>Status</h2><p>Sprüche: <b>"+String(quoteCount)+"</b> | Ideen: <b>"+String(msgCount)+"</b> | Ungelesen: <b>"+String(unread)+"</b> | Verbunden: <b>"+String(WiFi.softAPgetStationNum())+"</b></p>"
-     "<form method=post action=/admin/read><button class=d>Alle als gelesen</button></form></div>";
+     "</div>";
 
   p+="<div class=c><h2>OLED</h2><form method=post action=/admin/settings>"
      "<small>Spruch-Speed</small><input type=range name=qs min=10 max=100 value="+String(quoteSpeed)+">"
@@ -423,7 +392,7 @@ String adminPage(){
      "<small>Kontrast</small><input type=range name=ct min=20 max=255 value="+String(contrast)+">"
      "<button>Speichern</button></form></div>";
 
-  p+="<div class=c><h2>Spruch hinzufügen</h2><form method=post action=/admin/addq>"
+  p+="<div class=c><h2>Spruch +</h2><form method=post action=/admin/addq>"
      "<textarea name=q maxlength=180 placeholder='Spruch...' required></textarea><input name=a maxlength=70 placeholder='Autor'>"
      "<button>Hinzufügen</button></form></div>";
 
@@ -435,9 +404,9 @@ String adminPage(){
     }
     p+="</div></div>";
   }
-  p+="<form method=post action=/admin/reset><button class=d>Standardsprüche</button></form></div>";
+  p+="<form method=post action=/admin/reset><button class=d>Reset Sprüche</button></form></div>";
 
-  p+="<div class=c><h2>Ideen-Inbox</h2>";
+  p+="<div class=c><h2>Ideen</h2>";
   if(!msgCount) p+="<small>Noch keine Ideen.</small>";
   else{
     for(int i=msgCount-1;i>=0;i--){
@@ -445,7 +414,7 @@ String adminPage(){
       p+="<div class=m><div class=row><div><b>"+esc(n)+"</b><br><small>"+esc(msgs[i].text)+"</small></div>"
          "<form method=post action=/admin/delm><input type=hidden name=i value="+String(i)+"><button class=r>×</button></form></div></div>";
     }
-    p+="<form method=post action=/admin/clear><button class=r>Alle Ideen löschen</button></form>";
+    p+="<form method=post action=/admin/clear><button class=r>Ideen löschen</button></form>";
   }
   p+="</div><div class=c><small>Wi-Fi: "+String(WIFI_NAME)+"<br>Gast: http://10.77.0.1/<br>BLE: Amir<br>Admin: "+String(ADMIN_PATH)+"</small>"
      "<form method=post action=/admin/logout><button class=d>Abmelden</button></form></div></body></html>";
@@ -464,23 +433,25 @@ void handleIdea(){
   String n=server.hasArg("name")?server.arg("name"):"";
   String t=server.hasArg("idea")?server.arg("idea"):"";
   if(!addMessage(n,t)){
-    server.send(400,"text/html; charset=utf-8",guestPage("<div class=warn>Ungültige Eingabe.</div>")); return;
+    server.send(400,"text/html; charset=utf-8",guestPage("<div class=warn>Eingabe ungültig.</div>")); return;
   }
   lastGuestPost=now;
-  server.send(200,"text/html; charset=utf-8",guestPage("<div class=ok>Gespeichert! Schau jetzt aufs OLED 👀</div>"));
+  server.send(200,"text/html; charset=utf-8",guestPage("<div class=ok>Gespeichert! Schau aufs OLED 👀</div>"));
 }
 
 void handleAdmin(){
   if(server.method()==HTTP_GET){
-    server.send(200,"text/html; charset=utf-8",adminOK()?adminPage():loginPage(false)); return;
+    if(adminOK()){
+      if(unread){ unread=0; prefs.putUShort("ur",0); }
+      server.send(200,"text/html; charset=utf-8",adminPage());
+    } else server.send(200,"text/html; charset=utf-8",loginPage(false));
+    return;
   }
   if(server.arg("pin")==ADMIN_PIN){ setCookie(); goAdmin(); }
   else server.send(403,"text/html; charset=utf-8",loginPage(true));
 }
 
 void aNext(){ if(!needAdmin())return; randomQuote(); if(mode==MODE_QUOTE)drawQuote(); goAdmin(); }
-void aTest(){ if(!needAdmin())return; enqueueIdea("TEST","Das ist eine neue Idee für Amir!"); if(mode==MODE_QUOTE)nextIdea(); goAdmin(); }
-void aRead(){ if(!needAdmin())return; unread=0; saveMsgs(); goAdmin(); }
 void aSettings(){
   if(!needAdmin())return;
   if(server.hasArg("qs")) quoteSpeed=constrain(server.arg("qs").toInt(),10,100);
@@ -514,15 +485,12 @@ bool startWiFiAP(){
   WiFi.mode(WIFI_AP);
   delay(250);
 
-  if(!WiFi.softAPConfig(AP_IP,AP_GW,AP_MASK)){
-    Serial.println("softAPConfig FAILED");
-  }
+  WiFi.softAPConfig(AP_IP,AP_GW,AP_MASK);
 
   // Open 2.4 GHz AP, channel 1, visible SSID, max 4 clients.
   bool ok=WiFi.softAP(WIFI_NAME,NULL,1,0,4);
 
   if(!ok){
-    Serial.println("softAP first attempt FAILED - retrying");
     WiFi.mode(WIFI_OFF);
     delay(400);
     WiFi.mode(WIFI_AP);
@@ -535,13 +503,6 @@ bool startWiFiAP(){
     WiFi.setSleep(false);
     delay(300);
 
-    Serial.println("WIFI AP STARTED");
-    Serial.print("SSID: ");
-    Serial.println(WIFI_NAME);
-    Serial.print("IP: ");
-    Serial.println(WiFi.softAPIP());
-    Serial.print("Channel: ");
-    Serial.println(WiFi.channel());
 
     // Brief startup confirmation on OLED so you know the AP really started.
     u8g2.clearBuffer();
@@ -552,7 +513,6 @@ bool startWiFiAP(){
     u8g2.sendBuffer();
     delay(1400);
   } else {
-    Serial.println("WIFI AP FAILED");
 
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x12_tf);
@@ -578,7 +538,6 @@ void startBLE(){
 // ---------------- setup / loop ----------------
 
 void setup(){
-  Serial.begin(115200);
   delay(250);
   randomSeed(esp_random());
 
@@ -612,8 +571,6 @@ void setup(){
   server.on(ADMIN_PATH,HTTP_POST,handleAdmin);
 
   server.on("/admin/next",HTTP_POST,aNext);
-  server.on("/admin/test",HTTP_POST,aTest);
-  server.on("/admin/read",HTTP_POST,aRead);
   server.on("/admin/settings",HTTP_POST,aSettings);
   server.on("/admin/addq",HTTP_POST,aAddQ);
   server.on("/admin/delq",HTTP_POST,aDelQ);
@@ -623,10 +580,7 @@ void setup(){
   server.on("/admin/logout",HTTP_POST,aLogout);
 
   server.on("/generate_204",HTTP_ANY,portal);
-  server.on("/gen_204",HTTP_ANY,portal);
   server.on("/hotspot-detect.html",HTTP_ANY,portal);
-  server.on("/ncsi.txt",HTTP_ANY,portal);
-  server.on("/connecttest.txt",HTTP_ANY,portal);
   server.onNotFound(portal);
 
   server.begin();
@@ -635,10 +589,6 @@ void setup(){
   prepareQuote();
   drawQuote();
 
-  Serial.println("AMIR IDEA BEACON ULTIMATE LITE - WIFI FIX");
-  Serial.print("SSID: "); Serial.println(WIFI_NAME);
-  Serial.print("Guest: http://"); Serial.println(WiFi.softAPIP());
-  Serial.print("Admin: http://"); Serial.print(WiFi.softAPIP()); Serial.println(ADMIN_PATH);
 }
 
 void loop(){
