@@ -1,0 +1,10 @@
+{
+  "balanced_braces": true,
+  "balanced_parentheses": true,
+  "no_hardcoded_original_pin": true,
+  "csrf_present": true,
+  "cookie_http_only": true,
+  "input_index_validation": true,
+  "dns_start_guard": true,
+  "wrap_safe_lockout": true
+}
