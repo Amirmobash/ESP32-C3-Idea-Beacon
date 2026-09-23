@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include <Wire.h>
 #include <WiFi.h>
@@ -8,476 +7,1116 @@
 #include <U8g2lib.h>
 #include <BLEDevice.h>
 
-const char* WIFI_NAME="Amir-Message";
-const char* BLE_NAME="Amir";
-const char* ADMIN_PATH="/a7K9m2Q4x8";
-const char* ADMIN_PIN="7391";
+// ============================================================================
+// Amir Mobasheraghdam — ESP32-C3 Idea Beacon
+// Target: Seeed Studio XIAO ESP32-C3 + 1.3" SH1106 128x64 OLED
+// ============================================================================
 
-IPAddress AP_IP(10,77,0,1), AP_GW(10,77,0,1), AP_MASK(255,255,255,0);
+namespace Config {
+constexpr char WIFI_NAME[] = "Amir-Message";
+constexpr char BLE_NAME[] = "Amir";
+constexpr char ADMIN_PATH[] = "/admin";
 
-// Most 1.3" 128x64 OLEDs:
-U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0,U8X8_PIN_NONE);
-// SSD1306 alternative:
-// U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0,U8X8_PIN_NONE);
+constexpr uint8_t MAX_QUOTES = 18;
+constexpr uint8_t MAX_MESSAGES = 20;
+constexpr uint8_t IDEA_QUEUE_SIZE = 6;
+
+constexpr uint16_t GUEST_NAME_MAX = 40;
+constexpr uint16_t GUEST_IDEA_MAX = 180;
+constexpr uint16_t QUOTE_TEXT_MAX = 180;
+constexpr uint16_t QUOTE_AUTHOR_MAX = 70;
+
+constexpr uint32_t POST_COOLDOWN_MS = 3500;
+constexpr uint32_t LOGIN_COOLDOWN_MS = 1500;
+constexpr uint8_t MAX_LOGIN_FAILURES = 5;
+constexpr uint32_t LOGIN_LOCKOUT_MS = 30000;
+constexpr uint32_t ALERT_DURATION_MS = 1800;
+constexpr uint32_t END_PAUSE_MS = 600;
+}
+
+IPAddress AP_IP(10, 77, 0, 1);
+IPAddress AP_GW(10, 77, 0, 1);
+IPAddress AP_MASK(255, 255, 255, 0);
+
+U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
+// For SSD1306 displays, replace the line above with:
+// U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
 WebServer server(80);
 DNSServer dns;
 Preferences prefs;
 
-const uint8_t MAX_QUOTES=18, MAX_MSG=20, QSIZE=6;
-
-struct Quote { String text, author; };
-struct Msg   { String name, text; };
-struct Pending { String name, text; };
-
-Quote quotes[MAX_QUOTES];
-Msg msgs[MAX_MSG];
-Pending qbuf[QSIZE];
-
-uint8_t quoteCount=0,msgCount=0,currentQuote=0;
-uint8_t qHead=0,qTail=0,qCount=0;
-uint16_t unread=0;
-
-const char* DQ[]={
-"Was mich nicht umbringt, macht mich stärker.",
-"Habe Mut, dich deines eigenen Verstandes zu bedienen!",
-"Es ist nicht genug zu wissen, man muss auch anwenden.",
-"Der Mensch ist nur da ganz Mensch, wo er spielt.",
-"Jedem Anfang wohnt ein Zauber inne.",
-"Es gibt nichts Gutes, außer man tut es.",
-"Du musst dein Leben ändern."
+struct Quote {
+  String text;
+  String author;
 };
-const char* DA[]={
-"Friedrich Nietzsche","Immanuel Kant","Johann Wolfgang von Goethe",
-"Friedrich Schiller","Hermann Hesse","Erich Kästner",
-"Rainer Maria Rilke"
+
+struct Message {
+  String name;
+  String text;
 };
-const uint8_t DCOUNT=sizeof(DQ)/sizeof(DQ[0]);
 
-uint8_t quoteSpeed=42,ideaSpeed=54,contrast=220;
-uint16_t minQuoteSec=12;
+struct PendingIdea {
+  String name;
+  String text;
+};
 
-enum Mode { MODE_QUOTE, MODE_ALERT, MODE_IDEA };
-Mode mode=MODE_QUOTE;
+Quote quotes[Config::MAX_QUOTES];
+Message messages[Config::MAX_MESSAGES];
+PendingIdea ideaQueue[Config::IDEA_QUEUE_SIZE];
 
-int32_t x=128,w=0;
-unsigned long lastTick=0,modeStart=0,endPauseAt=0;
-bool endPause=false;
+uint8_t quoteCount = 0;
+uint8_t messageCount = 0;
+uint8_t currentQuote = 0;
 
-String activeName,activeIdea,session;
-unsigned long lastGuestPost=0;
-const unsigned long POST_COOLDOWN=3500;
+uint8_t queueHead = 0;
+uint8_t queueTail = 0;
+uint8_t queueCount = 0;
+
+uint16_t unread = 0;
+
+const char* DEFAULT_QUOTES[] = {
+  "Was mich nicht umbringt, macht mich stärker.",
+  "Habe Mut, dich deines eigenen Verstandes zu bedienen!",
+  "Es ist nicht genug zu wissen, man muss auch anwenden.",
+  "Der Mensch ist nur da ganz Mensch, wo er spielt.",
+  "Jedem Anfang wohnt ein Zauber inne.",
+  "Es gibt nichts Gutes, außer man tut es.",
+  "Du musst dein Leben ändern."
+};
+
+const char* DEFAULT_AUTHORS[] = {
+  "Friedrich Nietzsche",
+  "Immanuel Kant",
+  "Johann Wolfgang von Goethe",
+  "Friedrich Schiller",
+  "Hermann Hesse",
+  "Erich Kästner",
+  "Rainer Maria Rilke"
+};
+
+constexpr uint8_t DEFAULT_QUOTE_COUNT =
+    sizeof(DEFAULT_QUOTES) / sizeof(DEFAULT_QUOTES[0]);
+
+uint8_t quoteSpeed = 42;
+uint8_t ideaSpeed = 54;
+uint8_t contrast = 220;
+uint16_t minQuoteSeconds = 12;
+
+enum DisplayMode {
+  MODE_QUOTE,
+  MODE_ALERT,
+  MODE_IDEA
+};
+
+DisplayMode mode = MODE_QUOTE;
+
+int32_t scrollX = 128;
+int32_t textWidth = 0;
+uint32_t lastTick = 0;
+uint32_t modeStart = 0;
+uint32_t endPauseAt = 0;
+bool endPause = false;
+
+String activeName;
+String activeIdea;
+
+String sessionToken;
+String adminPin;
+
+uint32_t lastGuestPost = 0;
+uint32_t lastLoginAttempt = 0;
+uint32_t loginLockoutUntil = 0;
+uint8_t loginFailures = 0;
+
+bool dnsStarted = false;
 
 // ---------------- helpers ----------------
 
-String clean(String s){
-  s.replace("\r"," "); s.replace("\n"," "); s.trim();
-  while(s.indexOf("  ")>=0) s.replace("  "," ");
-  return s;
-}
-String esc(String s){
-  s.replace("&","&amp;"); s.replace("<","&lt;"); s.replace(">","&gt;");
-  s.replace("\"","&quot;"); s.replace("'","&#39;"); return s;
-}
-String key1(char p,uint8_t i){ char k[5]; snprintf(k,sizeof(k),"%c%02u",p,i); return String(k); }
-String key2(const char* p,uint8_t i){ char k[6]; snprintf(k,sizeof(k),"%s%02u",p,i); return String(k); }
+String cleanText(String value) {
+  value.replace("\r", " ");
+  value.replace("\n", " ");
+  value.trim();
 
-String makeToken(){
-  char b[17];
-  snprintf(b,sizeof(b),"%08lX%08lX",(unsigned long)esp_random(),(unsigned long)esp_random());
-  return String(b);
+  while (value.indexOf("  ") >= 0) {
+    value.replace("  ", " ");
+  }
+  return value;
 }
 
-void center(const String& s,int y){
-  int px=(128-u8g2.getUTF8Width(s.c_str()))/2;
-  if(px<0) px=0;
-  u8g2.drawUTF8(px,y,s.c_str());
+String htmlEscape(String value) {
+  value.replace("&", "&amp;");
+  value.replace("<", "&lt;");
+  value.replace(">", "&gt;");
+  value.replace("\"", "&quot;");
+  value.replace("'", "&#39;");
+  return value;
+}
+
+String prefKey(char prefix, uint8_t index) {
+  char key[5];
+  snprintf(key, sizeof(key), "%c%02u", prefix, index);
+  return String(key);
+}
+
+String makeToken() {
+  char buffer[33];
+  snprintf(
+      buffer,
+      sizeof(buffer),
+      "%08lX%08lX%08lX%08lX",
+      static_cast<unsigned long>(esp_random()),
+      static_cast<unsigned long>(esp_random()),
+      static_cast<unsigned long>(esp_random()),
+      static_cast<unsigned long>(esp_random()));
+  return String(buffer);
+}
+
+String generateAdminPin() {
+  uint32_t value = 100000 + (esp_random() % 900000);
+  return String(value);
+}
+
+void drawCentered(const String& text, int y) {
+  int x = (128 - u8g2.getUTF8Width(text.c_str())) / 2;
+  if (x < 0) {
+    x = 0;
+  }
+  u8g2.drawUTF8(x, y, text.c_str());
+}
+
+bool elapsed(uint32_t now, uint32_t start, uint32_t duration) {
+  return static_cast<uint32_t>(now - start) >= duration;
+}
+
+bool validIndexArg(const String& arg, uint8_t upperExclusive, uint8_t& out) {
+  if (!arg.length()) {
+    return false;
+  }
+
+  for (size_t i = 0; i < arg.length(); ++i) {
+    if (!isDigit(arg[i])) {
+      return false;
+    }
+  }
+
+  long value = arg.toInt();
+  if (value < 0 || value >= upperExclusive) {
+    return false;
+  }
+
+  out = static_cast<uint8_t>(value);
+  return true;
 }
 
 // ---------------- storage ----------------
 
-void saveSettings(){
-  prefs.putUChar("qs",quoteSpeed);
-  prefs.putUChar("is",ideaSpeed);
-  prefs.putUShort("qd",minQuoteSec);
-  prefs.putUChar("ct",contrast);
-}
-void loadSettings(){
-  quoteSpeed=constrain((int)prefs.getUChar("qs",42),10,100);
-  ideaSpeed=constrain((int)prefs.getUChar("is",54),15,110);
-  minQuoteSec=constrain((int)prefs.getUShort("qd",12),3,300);
-  contrast=constrain((int)prefs.getUChar("ct",220),20,255);
+void saveSettings() {
+  prefs.putUChar("qs", quoteSpeed);
+  prefs.putUChar("is", ideaSpeed);
+  prefs.putUShort("qd", minQuoteSeconds);
+  prefs.putUChar("ct", contrast);
 }
 
-void saveQuotes(){
-  prefs.putUChar("qc",quoteCount);
-  for(uint8_t i=0;i<MAX_QUOTES;i++){
-    String qk=key1('q',i), ak=key1('a',i);
-    if(i<quoteCount){
-      prefs.putString(qk.c_str(),quotes[i].text);
-      prefs.putString(ak.c_str(),quotes[i].author);
+void loadSettings() {
+  quoteSpeed = constrain(static_cast<int>(prefs.getUChar("qs", 42)), 10, 100);
+  ideaSpeed = constrain(static_cast<int>(prefs.getUChar("is", 54)), 15, 110);
+  minQuoteSeconds =
+      constrain(static_cast<int>(prefs.getUShort("qd", 12)), 3, 300);
+  contrast =
+      constrain(static_cast<int>(prefs.getUChar("ct", 220)), 20, 255);
+}
+
+void saveQuotes() {
+  prefs.putUChar("qc", quoteCount);
+
+  for (uint8_t i = 0; i < Config::MAX_QUOTES; ++i) {
+    String qKey = prefKey('q', i);
+    String aKey = prefKey('a', i);
+
+    if (i < quoteCount) {
+      prefs.putString(qKey.c_str(), quotes[i].text);
+      prefs.putString(aKey.c_str(), quotes[i].author);
     } else {
-      prefs.remove(qk.c_str()); prefs.remove(ak.c_str());
+      prefs.remove(qKey.c_str());
+      prefs.remove(aKey.c_str());
     }
   }
 }
-void defaults(){
-  quoteCount=min((int)DCOUNT,(int)MAX_QUOTES);
-  for(uint8_t i=0;i<quoteCount;i++){ quotes[i].text=DQ[i]; quotes[i].author=DA[i]; }
+
+void restoreDefaultQuotes() {
+  quoteCount = min(
+      static_cast<int>(DEFAULT_QUOTE_COUNT),
+      static_cast<int>(Config::MAX_QUOTES));
+
+  for (uint8_t i = 0; i < quoteCount; ++i) {
+    quotes[i].text = DEFAULT_QUOTES[i];
+    quotes[i].author = DEFAULT_AUTHORS[i];
+  }
+
+  currentQuote = 0;
   saveQuotes();
 }
-void loadQuotes(){
-  quoteCount=prefs.getUChar("qc",0);
-  if(!quoteCount || quoteCount>MAX_QUOTES){ defaults(); return; }
-  uint8_t v=0;
-  for(uint8_t i=0;i<quoteCount;i++){
-    String q=prefs.getString(key1('q',i).c_str(),"");
-    String a=prefs.getString(key1('a',i).c_str(),"");
-    q=clean(q); a=clean(a);
-    if(q.length()){ quotes[v].text=q; quotes[v].author=a; v++; }
+
+void loadQuotes() {
+  quoteCount = prefs.getUChar("qc", 0);
+
+  if (quoteCount == 0 || quoteCount > Config::MAX_QUOTES) {
+    restoreDefaultQuotes();
+    return;
   }
-  quoteCount=v;
-  if(!quoteCount) defaults(); else saveQuotes();
+
+  uint8_t validCount = 0;
+
+  for (uint8_t i = 0; i < quoteCount; ++i) {
+    String quote = cleanText(prefs.getString(prefKey('q', i).c_str(), ""));
+    String author = cleanText(prefs.getString(prefKey('a', i).c_str(), ""));
+
+    if (quote.length()) {
+      quotes[validCount].text = quote;
+      quotes[validCount].author = author;
+      ++validCount;
+    }
+  }
+
+  quoteCount = validCount;
+
+  if (quoteCount == 0) {
+    restoreDefaultQuotes();
+  } else {
+    saveQuotes();
+  }
 }
 
-void saveMsgs(){
-  prefs.putUChar("mc",msgCount);
-  prefs.putUShort("ur",unread);
-  for(uint8_t i=0;i<MAX_MSG;i++){
-    String nk=key2("n",i),tk=key2("m",i);
-    if(i<msgCount){
-      prefs.putString(nk.c_str(),msgs[i].name);
-      prefs.putString(tk.c_str(),msgs[i].text);
+void saveMessages() {
+  prefs.putUChar("mc", messageCount);
+  prefs.putUShort("ur", unread);
+
+  for (uint8_t i = 0; i < Config::MAX_MESSAGES; ++i) {
+    String nKey = prefKey('n', i);
+    String mKey = prefKey('m', i);
+
+    if (i < messageCount) {
+      prefs.putString(nKey.c_str(), messages[i].name);
+      prefs.putString(mKey.c_str(), messages[i].text);
     } else {
-      prefs.remove(nk.c_str()); prefs.remove(tk.c_str());
+      prefs.remove(nKey.c_str());
+      prefs.remove(mKey.c_str());
     }
   }
 }
-void loadMsgs(){
-  msgCount=prefs.getUChar("mc",0);
-  unread=prefs.getUShort("ur",0);
-  if(msgCount>MAX_MSG) msgCount=0;
-  uint8_t v=0;
-  for(uint8_t i=0;i<msgCount;i++){
-    String n=clean(prefs.getString(key2("n",i).c_str(),""));
-    String t=clean(prefs.getString(key2("m",i).c_str(),""));
-    if(t.length()){ msgs[v].name=n; msgs[v].text=t; v++; }
+
+void loadMessages() {
+  messageCount = prefs.getUChar("mc", 0);
+  unread = prefs.getUShort("ur", 0);
+
+  if (messageCount > Config::MAX_MESSAGES) {
+    messageCount = 0;
   }
-  msgCount=v;
+
+  uint8_t validCount = 0;
+
+  for (uint8_t i = 0; i < messageCount; ++i) {
+    String name = cleanText(prefs.getString(prefKey('n', i).c_str(), ""));
+    String text = cleanText(prefs.getString(prefKey('m', i).c_str(), ""));
+
+    if (text.length()) {
+      messages[validCount].name = name;
+      messages[validCount].text = text;
+      ++validCount;
+    }
+  }
+
+  messageCount = validCount;
+}
+
+void loadOrCreateAdminPin() {
+  adminPin = prefs.getString("apin", "");
+
+  bool valid = adminPin.length() == 6;
+  for (size_t i = 0; valid && i < adminPin.length(); ++i) {
+    valid = isDigit(adminPin[i]);
+  }
+
+  if (!valid) {
+    adminPin = generateAdminPin();
+    prefs.putString("apin", adminPin);
+  }
 }
 
 // ---------------- queue ----------------
 
-void enqueueIdea(const String& n,const String& t){
-  if(qCount>=QSIZE) return;
-  qbuf[qTail].name=n; qbuf[qTail].text=t;
-  qTail=(qTail+1)%QSIZE; qCount++;
+void enqueueIdea(const String& name, const String& text) {
+  // If the queue is full, drop the oldest pending display item.
+  // The message still remains stored in the admin dashboard.
+  if (queueCount >= Config::IDEA_QUEUE_SIZE) {
+    ideaQueue[queueHead].name = "";
+    ideaQueue[queueHead].text = "";
+    queueHead = (queueHead + 1) % Config::IDEA_QUEUE_SIZE;
+    --queueCount;
+  }
+
+  ideaQueue[queueTail].name = name;
+  ideaQueue[queueTail].text = text;
+  queueTail = (queueTail + 1) % Config::IDEA_QUEUE_SIZE;
+  ++queueCount;
 }
-bool dequeueIdea(Pending& p){
-  if(!qCount) return false;
-  p=qbuf[qHead];
-  qbuf[qHead].name=""; qbuf[qHead].text="";
-  qHead=(qHead+1)%QSIZE; qCount--;
+
+bool dequeueIdea(PendingIdea& pending) {
+  if (queueCount == 0) {
+    return false;
+  }
+
+  pending = ideaQueue[queueHead];
+  ideaQueue[queueHead].name = "";
+  ideaQueue[queueHead].text = "";
+  queueHead = (queueHead + 1) % Config::IDEA_QUEUE_SIZE;
+  --queueCount;
   return true;
 }
 
 // ---------------- OLED ----------------
-//
-// IMPORTANT SIZE OPTIMIZATION:
-// only TWO U8g2 fonts are linked:
-//   u8g2_font_10x20_tf -> large German UTF-8 text
-//   u8g2_font_6x12_tf  -> small labels / authors
-//
-// This saves a lot of flash versus multiple Helvetica fonts.
 
-void prepareQuote(){
-  mode=MODE_QUOTE;
-  u8g2.setFont(u8g2_font_10x20_tf);
-  w=u8g2.getUTF8Width(quotes[currentQuote].text.c_str());
-  x=128; lastTick=millis(); modeStart=millis(); endPause=false;
-}
-void randomQuote(){
-  if(quoteCount>1){
-    uint8_t n=random(quoteCount);
-    while(n==currentQuote) n=random(quoteCount);
-    currentQuote=n;
+void prepareQuote() {
+  if (quoteCount == 0) {
+    restoreDefaultQuotes();
   }
+
+  mode = MODE_QUOTE;
+  u8g2.setFont(u8g2_font_10x20_tf);
+  textWidth = u8g2.getUTF8Width(quotes[currentQuote].text.c_str());
+  scrollX = 128;
+  lastTick = millis();
+  modeStart = millis();
+  endPause = false;
+}
+
+void randomQuote() {
+  if (quoteCount > 1) {
+    uint8_t next = random(quoteCount);
+    while (next == currentQuote) {
+      next = random(quoteCount);
+    }
+    currentQuote = next;
+  }
+
   prepareQuote();
 }
-void drawQuote(){
+
+void drawQuote() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_10x20_tf);
-  u8g2.drawUTF8(x,31,quotes[currentQuote].text.c_str());
-  u8g2.drawHLine(3,40,122);
+  u8g2.drawUTF8(scrollX, 31, quotes[currentQuote].text.c_str());
+  u8g2.drawHLine(3, 40, 122);
+
   u8g2.setFont(u8g2_font_6x12_tf);
-  String a=quotes[currentQuote].author;
-  if(!a.length()) a="Unbekannt";
-  center(a,59);
+  String author = quotes[currentQuote].author;
+  if (!author.length()) {
+    author = "Unbekannt";
+  }
+  drawCentered(author, 59);
+
   u8g2.sendBuffer();
 }
 
-void nextIdea(){
-  Pending p;
-  if(!dequeueIdea(p)){ prepareQuote(); drawQuote(); return; }
-  activeName=p.name; activeIdea=p.text;
-  mode=MODE_ALERT; modeStart=millis(); endPause=false;
+void nextIdea() {
+  PendingIdea pending;
+
+  if (!dequeueIdea(pending)) {
+    prepareQuote();
+    drawQuote();
+    return;
+  }
+
+  activeName = pending.name;
+  activeIdea = pending.text;
+  mode = MODE_ALERT;
+  modeStart = millis();
+  endPause = false;
 }
-void beginIdeaScroll(){
-  mode=MODE_IDEA;
+
+void beginIdeaScroll() {
+  mode = MODE_IDEA;
   u8g2.setFont(u8g2_font_10x20_tf);
-  w=u8g2.getUTF8Width(activeIdea.c_str());
-  x=128; lastTick=millis(); endPause=false;
+  textWidth = u8g2.getUTF8Width(activeIdea.c_str());
+  scrollX = 128;
+  lastTick = millis();
+  endPause = false;
 }
-void drawAlert(){
+
+void drawAlert() {
   u8g2.clearBuffer();
-  bool inv=((millis()/220UL)&1);
-  if(inv){ u8g2.drawBox(0,0,128,64); u8g2.setDrawColor(0); }
-  else u8g2.drawFrame(1,1,126,62);
+
+  bool inverted = ((millis() / 220UL) & 1U) != 0;
+  if (inverted) {
+    u8g2.drawBox(0, 0, 128, 64);
+    u8g2.setDrawColor(0);
+  } else {
+    u8g2.drawFrame(1, 1, 126, 62);
+  }
 
   u8g2.setFont(u8g2_font_10x20_tf);
-  center("HEY!",24);
+  drawCentered("HEY!", 24);
+
   u8g2.setFont(u8g2_font_6x12_tf);
-  center("NEUE IDEE!",44);
-  center(String(unread)+" ungelesen",59);
+  drawCentered("NEUE IDEE!", 44);
+  drawCentered(String(unread) + " ungelesen", 59);
 
   u8g2.setDrawColor(1);
   u8g2.sendBuffer();
 }
-void drawIdea(){
+
+void drawIdea() {
   u8g2.clearBuffer();
+
   u8g2.setFont(u8g2_font_6x12_tf);
-  String who=activeName.length()?("VON "+activeName):"ANONYM";
-  u8g2.drawUTF8(2,11,who.c_str());
-  u8g2.drawHLine(0,14,128);
+  String sender = activeName.length() ? ("VON " + activeName) : "ANONYM";
+  u8g2.drawUTF8(2, 11, sender.c_str());
+  u8g2.drawHLine(0, 14, 128);
 
   u8g2.setFont(u8g2_font_10x20_tf);
-  u8g2.drawUTF8(x,42,activeIdea.c_str());
+  u8g2.drawUTF8(scrollX, 42, activeIdea.c_str());
 
   u8g2.setFont(u8g2_font_6x12_tf);
-  center("NEUE IDEE",61);
+  drawCentered("NEUE IDEE", 61);
+
   u8g2.sendBuffer();
 }
 
-void updateDisplay(){
-  unsigned long now=millis();
+void updateDisplay() {
+  uint32_t now = millis();
 
-  if(mode==MODE_ALERT){
+  if (mode == MODE_ALERT) {
     drawAlert();
-    if(now-modeStart>=1800){ beginIdeaScroll(); drawIdea(); }
+
+    if (elapsed(now, modeStart, Config::ALERT_DURATION_MS)) {
+      beginIdeaScroll();
+      drawIdea();
+    }
     return;
   }
 
-  if(endPause){
-    if(now-endPauseAt<600) return;
-
-    if(mode==MODE_IDEA){
-      if(qCount) nextIdea();
-      else { prepareQuote(); drawQuote(); }
+  if (endPause) {
+    if (!elapsed(now, endPauseAt, Config::END_PAUSE_MS)) {
       return;
     }
 
-    if(now-modeStart >= (unsigned long)minQuoteSec*1000UL && quoteCount>1) randomQuote();
-    else { x=128; endPause=false; lastTick=now; }
+    if (mode == MODE_IDEA) {
+      if (queueCount > 0) {
+        nextIdea();
+      } else {
+        prepareQuote();
+        drawQuote();
+      }
+      return;
+    }
+
+    if (elapsed(
+            now,
+            modeStart,
+            static_cast<uint32_t>(minQuoteSeconds) * 1000UL) &&
+        quoteCount > 1) {
+      randomQuote();
+    } else {
+      scrollX = 128;
+      endPause = false;
+      lastTick = now;
+    }
     return;
   }
 
-  uint8_t speed=(mode==MODE_IDEA)?ideaSpeed:quoteSpeed;
-  uint16_t frame=max((uint16_t)9,(uint16_t)(1000UL/speed));
-  if(now-lastTick<frame) return;
-  lastTick=now; x--;
+  uint8_t speed = (mode == MODE_IDEA) ? ideaSpeed : quoteSpeed;
+  uint16_t frameMs =
+      max(static_cast<uint16_t>(9), static_cast<uint16_t>(1000UL / speed));
 
-  if(mode==MODE_IDEA) drawIdea(); else drawQuote();
-
-  if(x<-(w+16)){ endPause=true; endPauseAt=now; }
-}
-
-// ---------------- message / quote management ----------------
-
-bool addMessage(String n,String t){
-  n=clean(n); t=clean(t);
-  if(!t.length() || n.length()>60 || t.length()>360) return false;
-
-  if(msgCount<MAX_MSG){
-    msgs[msgCount].name=n; msgs[msgCount].text=t; msgCount++;
-  } else {
-    for(uint8_t i=1;i<MAX_MSG;i++) msgs[i-1]=msgs[i];
-    msgs[MAX_MSG-1].name=n; msgs[MAX_MSG-1].text=t;
+  if (!elapsed(now, lastTick, frameMs)) {
+    return;
   }
-  if(unread<999) unread++;
-  saveMsgs();
-  enqueueIdea(n,t);
-  if(mode==MODE_QUOTE) nextIdea();
+
+  lastTick = now;
+  --scrollX;
+
+  if (mode == MODE_IDEA) {
+    drawIdea();
+  } else {
+    drawQuote();
+  }
+
+  if (scrollX < -(textWidth + 16)) {
+    endPause = true;
+    endPauseAt = now;
+  }
+}
+
+// ---------------- content management ----------------
+
+bool addMessage(String name, String text) {
+  name = cleanText(name);
+  text = cleanText(text);
+
+  if (!text.length() ||
+      name.length() > Config::GUEST_NAME_MAX ||
+      text.length() > Config::GUEST_IDEA_MAX) {
+    return false;
+  }
+
+  if (messageCount < Config::MAX_MESSAGES) {
+    messages[messageCount].name = name;
+    messages[messageCount].text = text;
+    ++messageCount;
+  } else {
+    for (uint8_t i = 1; i < Config::MAX_MESSAGES; ++i) {
+      messages[i - 1] = messages[i];
+    }
+    messages[Config::MAX_MESSAGES - 1].name = name;
+    messages[Config::MAX_MESSAGES - 1].text = text;
+  }
+
+  if (unread < 999) {
+    ++unread;
+  }
+
+  saveMessages();
+  enqueueIdea(name, text);
+
+  if (mode == MODE_QUOTE) {
+    nextIdea();
+  }
+
   return true;
 }
-void delMsg(uint8_t i){
-  if(i>=msgCount) return;
-  for(uint8_t j=i+1;j<msgCount;j++) msgs[j-1]=msgs[j];
-  msgCount--; saveMsgs();
+
+void deleteMessage(uint8_t index) {
+  if (index >= messageCount) {
+    return;
+  }
+
+  for (uint8_t i = index + 1; i < messageCount; ++i) {
+    messages[i - 1] = messages[i];
+  }
+
+  --messageCount;
+  saveMessages();
 }
-bool addQuote(String q,String a){
-  q=clean(q); a=clean(a);
-  if(!q.length() || quoteCount>=MAX_QUOTES) return false;
-  quotes[quoteCount].text=q; quotes[quoteCount].author=a;
-  currentQuote=quoteCount++;
+
+bool addQuote(String quote, String author) {
+  quote = cleanText(quote);
+  author = cleanText(author);
+
+  if (!quote.length() ||
+      quote.length() > Config::QUOTE_TEXT_MAX ||
+      author.length() > Config::QUOTE_AUTHOR_MAX ||
+      quoteCount >= Config::MAX_QUOTES) {
+    return false;
+  }
+
+  quotes[quoteCount].text = quote;
+  quotes[quoteCount].author = author;
+  currentQuote = quoteCount;
+  ++quoteCount;
+
   saveQuotes();
-  if(mode==MODE_QUOTE){ prepareQuote(); drawQuote(); }
+
+  if (mode == MODE_QUOTE) {
+    prepareQuote();
+    drawQuote();
+  }
+
   return true;
 }
-void delQuote(uint8_t i){
-  if(quoteCount<=1 || i>=quoteCount) return;
-  for(uint8_t j=i+1;j<quoteCount;j++) quotes[j-1]=quotes[j];
-  quoteCount--;
-  if(currentQuote>=quoteCount) currentQuote=0;
+
+void deleteQuote(uint8_t index) {
+  if (quoteCount <= 1 || index >= quoteCount) {
+    return;
+  }
+
+  for (uint8_t i = index + 1; i < quoteCount; ++i) {
+    quotes[i - 1] = quotes[i];
+  }
+
+  --quoteCount;
+
+  if (currentQuote >= quoteCount) {
+    currentQuote = 0;
+  }
+
   saveQuotes();
-  if(mode==MODE_QUOTE) prepareQuote();
+
+  if (mode == MODE_QUOTE) {
+    prepareQuote();
+  }
 }
 
-// ---------------- auth ----------------
+// ---------------- authentication ----------------
 
-bool adminOK(){
-  if(!server.hasHeader("Cookie")) return false;
-  return server.header("Cookie").indexOf("AS="+session)>=0;
+String cookieValue(const String& cookieHeader, const String& key) {
+  String marker = key + "=";
+  int start = cookieHeader.indexOf(marker);
+
+  while (start >= 0) {
+    bool boundaryBefore =
+        start == 0 || cookieHeader[start - 1] == ' ' || cookieHeader[start - 1] == ';';
+
+    if (boundaryBefore) {
+      int valueStart = start + marker.length();
+      int end = cookieHeader.indexOf(';', valueStart);
+      if (end < 0) {
+        end = cookieHeader.length();
+      }
+      String value = cookieHeader.substring(valueStart, end);
+      value.trim();
+      return value;
+    }
+
+    start = cookieHeader.indexOf(marker, start + 1);
+  }
+
+  return "";
 }
-void setCookie(){ server.sendHeader("Set-Cookie","AS="+session+"; Path=/; HttpOnly; SameSite=Strict"); }
-void goAdmin(){ server.sendHeader("Location",ADMIN_PATH); server.send(303,"text/plain",""); }
-bool needAdmin(){ if(adminOK()) return true; server.send(403,"text/plain","Forbidden"); return false; }
 
-// ---------------- compact web UI ----------------
-//
-// HTML/CSS intentionally compact to save flash.
+bool adminAuthenticated() {
+  if (!server.hasHeader("Cookie")) {
+    return false;
+  }
+
+  String value = cookieValue(server.header("Cookie"), "AS");
+  return value.length() && value == sessionToken;
+}
+
+bool csrfValid() {
+  return server.hasArg("csrf") && server.arg("csrf") == sessionToken;
+}
+
+bool requireAdmin(bool requireCsrf = true) {
+  if (!adminAuthenticated()) {
+    server.send(403, "text/plain; charset=utf-8", "Forbidden");
+    return false;
+  }
+
+  if (requireCsrf && !csrfValid()) {
+    server.send(403, "text/plain; charset=utf-8", "CSRF check failed");
+    return false;
+  }
+
+  return true;
+}
+
+void setSessionCookie() {
+  server.sendHeader(
+      "Set-Cookie",
+      "AS=" + sessionToken + "; Path=/; HttpOnly; SameSite=Strict");
+}
+
+void redirectAdmin() {
+  server.sendHeader("Location", Config::ADMIN_PATH);
+  server.send(303, "text/plain", "");
+}
+
+String csrfInput() {
+  return "<input type=hidden name=csrf value='" + sessionToken + "'>";
+}
+
+// ---------------- web UI ----------------
 
 const char PAGE_TOP[] PROGMEM =
-"<!doctype html><html lang=de><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
-"<style>body{margin:0;padding:14px;background:#091321;color:#eef;font:16px Arial}.c{max-width:640px;margin:12px auto;background:#16243a;padding:15px;border-radius:14px}"
-"input,textarea,button{box-sizing:border-box;width:100%;padding:11px;margin-top:8px;border:0;border-radius:9px;font:inherit}textarea{min-height:95px}button{background:#2672ff;color:white;font-weight:bold}"
-".g{background:#087f5b}.r{background:#b42318}.d{background:#40506a}.m,.q{background:#08111f;padding:9px;margin-top:7px;border-radius:9px}.row{display:grid;grid-template-columns:1fr auto;gap:7px}.row button{width:auto;margin:0}"
-".ok{background:#075c45;padding:10px}.warn{background:#7a3e00;padding:10px}small{color:#aab8cd}</style><body>";
+    "<!doctype html><html lang=de><meta charset=utf-8>"
+    "<meta name=viewport content='width=device-width,initial-scale=1'>"
+    "<style>"
+    "body{margin:0;padding:14px;background:#091321;color:#eef;font:16px Arial}"
+    ".c{max-width:640px;margin:12px auto;background:#16243a;padding:15px;border-radius:14px}"
+    "input,textarea,button{box-sizing:border-box;width:100%;padding:11px;margin-top:8px;border:0;border-radius:9px;font:inherit}"
+    "textarea{min-height:95px}"
+    "button{background:#2672ff;color:white;font-weight:bold}"
+    ".g{background:#087f5b}.r{background:#b42318}.d{background:#40506a}"
+    ".m,.q{background:#08111f;padding:9px;margin-top:7px;border-radius:9px}"
+    ".row{display:grid;grid-template-columns:1fr auto;gap:7px}.row button{width:auto;margin:0}"
+    ".ok{background:#075c45;padding:10px}.warn{background:#7a3e00;padding:10px}"
+    "small{color:#aab8cd}</style><body>";
 
-String guestPage(const String& note=""){
-  String p=FPSTR(PAGE_TOP);
-  p+="<div class=c><h1>Hast du eine Idee?</h1><p>Schick Amir deine beste Idee.</p>";
-  p+=note;
-  p+="<form method=post action=/idea><input name=name maxlength=40 placeholder='Name (optional)'><textarea name=idea maxlength=180 placeholder='Deine Idee...' required></textarea>"
-     "<button>Idee an Amir senden</button></form><p><small>Deine Idee erscheint gleich auf dem OLED.</small></p></div></body></html>";
-  return p;
+String guestPage(const String& notice = "") {
+  String page = FPSTR(PAGE_TOP);
+  page.reserve(1800);
+
+  page += "<div class=c><h1>Hast du eine Idee?</h1>"
+          "<p>Schick Amir deine beste Idee.</p>";
+  page += notice;
+  page +=
+      "<form method=post action=/idea>"
+      "<input name=name maxlength=40 placeholder='Name (optional)'>"
+      "<textarea name=idea maxlength=180 placeholder='Deine Idee...' required></textarea>"
+      "<button>Idee an Amir senden</button>"
+      "</form>"
+      "<p><small>Deine Idee erscheint gleich auf dem OLED.</small></p>"
+      "</div></body></html>";
+
+  return page;
 }
 
-String loginPage(bool bad=false){
-  String p=FPSTR(PAGE_TOP);
-  p+="<div class=c><h1>Admin</h1>";
-  if(bad) p+="<div class=warn>Falsche PIN.</div>";
-  p+="<form method=post action='";
-  p+=ADMIN_PATH;
-  p+="'><input type=password name=pin inputmode=numeric placeholder='PIN' required><button>Öffnen</button></form></div></body></html>";
-  return p;
+String loginPage(const String& notice = "") {
+  String page = FPSTR(PAGE_TOP);
+  page.reserve(1200);
+
+  page += "<div class=c><h1>Admin</h1>";
+  page += notice;
+  page += "<form method=post action='";
+  page += Config::ADMIN_PATH;
+  page +=
+      "'><input type=password name=pin inputmode=numeric maxlength=6 "
+      "placeholder='6-stellige PIN' required>"
+      "<button>Öffnen</button></form>"
+      "</div></body></html>";
+
+  return page;
 }
 
-String adminPage(){
-  String p=FPSTR(PAGE_TOP);
-  p.reserve(11000);
+String adminPage() {
+  String page = FPSTR(PAGE_TOP);
+  page.reserve(12000);
 
-  p+="<div class=c><h1>AMIR IDEA</h1><div class=q><b>";
-  p+=esc(quotes[currentQuote].text);
-  p+="</b><br><small>— "+esc(quotes[currentQuote].author)+"</small></div>"
-     "<form method=post action=/admin/next><button class=g>Nächster</button></form>"
-     "</div>";
+  page += "<div class=c><h1>AMIR IDEA</h1><div class=q><b>";
+  page += htmlEscape(quotes[currentQuote].text);
+  page += "</b><br><small>— ";
+  page += htmlEscape(quotes[currentQuote].author);
+  page += "</small></div>";
 
-  p+="<div class=c><h2>Status</h2><p>Sprüche: <b>"+String(quoteCount)+"</b> | Ideen: <b>"+String(msgCount)+"</b> | Ungelesen: <b>"+String(unread)+"</b> | Verbunden: <b>"+String(WiFi.softAPgetStationNum())+"</b></p>"
-     "</div>";
+  page += "<form method=post action=/admin/next>";
+  page += csrfInput();
+  page += "<button class=g>Nächster</button></form></div>";
 
-  p+="<div class=c><h2>OLED</h2><form method=post action=/admin/settings>"
-     "<small>Spruch-Speed</small><input type=range name=qs min=10 max=100 value="+String(quoteSpeed)+">"
-     "<small>Ideen-Speed</small><input type=range name=is min=15 max=110 value="+String(ideaSpeed)+">"
-     "<small>Sekunden pro Spruch</small><input type=number name=dur min=3 max=300 value="+String(minQuoteSec)+">"
-     "<small>Kontrast</small><input type=range name=ct min=20 max=255 value="+String(contrast)+">"
-     "<button>Speichern</button></form></div>";
+  page += "<div class=c><h2>Status</h2><p>Sprüche: <b>";
+  page += String(quoteCount);
+  page += "</b> | Ideen: <b>";
+  page += String(messageCount);
+  page += "</b> | Ungelesen: <b>";
+  page += String(unread);
+  page += "</b> | Verbunden: <b>";
+  page += String(WiFi.softAPgetStationNum());
+  page += "</b></p></div>";
 
-  p+="<div class=c><h2>Spruch +</h2><form method=post action=/admin/addq>"
-     "<textarea name=q maxlength=180 placeholder='Spruch...' required></textarea><input name=a maxlength=70 placeholder='Autor'>"
-     "<button>Hinzufügen</button></form></div>";
+  page +=
+      "<div class=c><h2>OLED</h2>"
+      "<form method=post action=/admin/settings>";
+  page += csrfInput();
+  page += "<small>Spruch-Speed</small><input type=range name=qs min=10 max=100 value=";
+  page += String(quoteSpeed);
+  page += "><small>Ideen-Speed</small><input type=range name=is min=15 max=110 value=";
+  page += String(ideaSpeed);
+  page += "><small>Sekunden pro Spruch</small><input type=number name=dur min=3 max=300 value=";
+  page += String(minQuoteSeconds);
+  page += "><small>Kontrast</small><input type=range name=ct min=20 max=255 value=";
+  page += String(contrast);
+  page += "><button>Speichern</button></form></div>";
 
-  p+="<div class=c><h2>Sprüche</h2>";
-  for(uint8_t i=0;i<quoteCount;i++){
-    p+="<div class=q><div class=row><div><b>"+esc(quotes[i].text)+"</b><br><small>— "+esc(quotes[i].author)+"</small></div>";
-    if(quoteCount>1){
-      p+="<form method=post action=/admin/delq><input type=hidden name=i value="+String(i)+"><button class=r>×</button></form>";
+  page +=
+      "<div class=c><h2>Spruch +</h2>"
+      "<form method=post action=/admin/addq>";
+  page += csrfInput();
+  page +=
+      "<textarea name=q maxlength=180 placeholder='Spruch...' required></textarea>"
+      "<input name=a maxlength=70 placeholder='Autor'>"
+      "<button>Hinzufügen</button></form></div>";
+
+  page += "<div class=c><h2>Sprüche</h2>";
+
+  for (uint8_t i = 0; i < quoteCount; ++i) {
+    page += "<div class=q><div class=row><div><b>";
+    page += htmlEscape(quotes[i].text);
+    page += "</b><br><small>— ";
+    page += htmlEscape(quotes[i].author);
+    page += "</small></div>";
+
+    if (quoteCount > 1) {
+      page += "<form method=post action=/admin/delq>";
+      page += csrfInput();
+      page += "<input type=hidden name=i value=";
+      page += String(i);
+      page += "><button class=r>×</button></form>";
     }
-    p+="</div></div>";
-  }
-  p+="<form method=post action=/admin/reset><button class=d>Reset Sprüche</button></form></div>";
 
-  p+="<div class=c><h2>Ideen</h2>";
-  if(!msgCount) p+="<small>Noch keine Ideen.</small>";
-  else{
-    for(int i=msgCount-1;i>=0;i--){
-      String n=msgs[i].name.length()?msgs[i].name:"Anonym";
-      p+="<div class=m><div class=row><div><b>"+esc(n)+"</b><br><small>"+esc(msgs[i].text)+"</small></div>"
-         "<form method=post action=/admin/delm><input type=hidden name=i value="+String(i)+"><button class=r>×</button></form></div></div>";
-    }
-    p+="<form method=post action=/admin/clear><button class=r>Ideen löschen</button></form>";
+    page += "</div></div>";
   }
-  p+="</div><div class=c><small>Wi-Fi: "+String(WIFI_NAME)+"<br>Gast: http://10.77.0.1/<br>BLE: Amir<br>Admin: "+String(ADMIN_PATH)+"</small>"
-     "<form method=post action=/admin/logout><button class=d>Abmelden</button></form></div></body></html>";
-  return p;
+
+  page += "<form method=post action=/admin/reset>";
+  page += csrfInput();
+  page += "<button class=d>Reset Sprüche</button></form></div>";
+
+  page += "<div class=c><h2>Ideen</h2>";
+
+  if (messageCount == 0) {
+    page += "<small>Noch keine Ideen.</small>";
+  } else {
+    for (int i = messageCount - 1; i >= 0; --i) {
+      String name = messages[i].name.length() ? messages[i].name : "Anonym";
+
+      page += "<div class=m><div class=row><div><b>";
+      page += htmlEscape(name);
+      page += "</b><br><small>";
+      page += htmlEscape(messages[i].text);
+      page += "</small></div><form method=post action=/admin/delm>";
+      page += csrfInput();
+      page += "<input type=hidden name=i value=";
+      page += String(i);
+      page += "><button class=r>×</button></form></div></div>";
+    }
+
+    page += "<form method=post action=/admin/clear>";
+    page += csrfInput();
+    page += "<button class=r>Ideen löschen</button></form>";
+  }
+
+  page += "</div>";
+
+  page +=
+      "<div class=c><h2>Sicherheit</h2>"
+      "<p><small>Die Admin-PIN wird im ESP32 gespeichert und steht nicht im öffentlichen Quellcode.</small></p>"
+      "<form method=post action=/admin/newpin>";
+  page += csrfInput();
+  page +=
+      "<input type=password name=newpin inputmode=numeric minlength=6 maxlength=6 "
+      "placeholder='Neue 6-stellige PIN' required>"
+      "<button>PIN ändern</button></form></div>";
+
+  page += "<div class=c><small>Wi-Fi: ";
+  page += Config::WIFI_NAME;
+  page += "<br>Gast: http://10.77.0.1/<br>BLE: ";
+  page += Config::BLE_NAME;
+  page += "<br>Admin: http://10.77.0.1";
+  page += Config::ADMIN_PATH;
+  page += "</small><form method=post action=/admin/logout>";
+  page += csrfInput();
+  page += "<button class=d>Abmelden</button></form></div></body></html>";
+
+  return page;
 }
 
 // ---------------- routes ----------------
 
-void handleRoot(){ server.send(200,"text/html; charset=utf-8",guestPage()); }
-
-void handleIdea(){
-  unsigned long now=millis();
-  if(now-lastGuestPost<POST_COOLDOWN){
-    server.send(429,"text/html; charset=utf-8",guestPage("<div class=warn>Bitte kurz warten.</div>")); return;
-  }
-  String n=server.hasArg("name")?server.arg("name"):"";
-  String t=server.hasArg("idea")?server.arg("idea"):"";
-  if(!addMessage(n,t)){
-    server.send(400,"text/html; charset=utf-8",guestPage("<div class=warn>Eingabe ungültig.</div>")); return;
-  }
-  lastGuestPost=now;
-  server.send(200,"text/html; charset=utf-8",guestPage("<div class=ok>Gespeichert! Schau aufs OLED 👀</div>"));
+void handleRoot() {
+  server.send(200, "text/html; charset=utf-8", guestPage());
 }
 
-void handleAdmin(){
-  if(server.method()==HTTP_GET){
-    if(adminOK()){
-      if(unread){ unread=0; prefs.putUShort("ur",0); }
-      server.send(200,"text/html; charset=utf-8",adminPage());
-    } else server.send(200,"text/html; charset=utf-8",loginPage(false));
+void handleIdea() {
+  uint32_t now = millis();
+
+  if (lastGuestPost != 0 &&
+      !elapsed(now, lastGuestPost, Config::POST_COOLDOWN_MS)) {
+    server.send(
+        429,
+        "text/html; charset=utf-8",
+        guestPage("<div class=warn>Bitte kurz warten.</div>"));
     return;
   }
-  if(server.arg("pin")==ADMIN_PIN){ setCookie(); goAdmin(); }
-  else server.send(403,"text/html; charset=utf-8",loginPage(true));
+
+  String name = server.hasArg("name") ? server.arg("name") : "";
+  String idea = server.hasArg("idea") ? server.arg("idea") : "";
+
+  if (!addMessage(name, idea)) {
+    server.send(
+        400,
+        "text/html; charset=utf-8",
+        guestPage("<div class=warn>Eingabe ungültig.</div>"));
+    return;
+  }
+
+  lastGuestPost = now;
+
+  server.send(
+      200,
+      "text/html; charset=utf-8",
+      guestPage("<div class=ok>Gespeichert! Schau aufs OLED 👀</div>"));
 }
 
-void aNext(){ if(!needAdmin())return; randomQuote(); if(mode==MODE_QUOTE)drawQuote(); goAdmin(); }
-void aSettings(){
-  if(!needAdmin())return;
-  if(server.hasArg("qs")) quoteSpeed=constrain(server.arg("qs").toInt(),10,100);
-  if(server.hasArg("is")) ideaSpeed=constrain(server.arg("is").toInt(),15,110);
-  if(server.hasArg("dur")) minQuoteSec=constrain(server.arg("dur").toInt(),3,300);
-  if(server.hasArg("ct")) contrast=constrain(server.arg("ct").toInt(),20,255);
-  u8g2.setContrast(contrast); saveSettings(); goAdmin();
+void handleAdmin() {
+  if (server.method() == HTTP_GET) {
+    if (adminAuthenticated()) {
+      if (unread > 0) {
+        unread = 0;
+        prefs.putUShort("ur", 0);
+      }
+      server.send(200, "text/html; charset=utf-8", adminPage());
+    } else {
+      server.send(200, "text/html; charset=utf-8", loginPage());
+    }
+    return;
+  }
+
+  uint32_t now = millis();
+
+  if (loginLockoutUntil != 0) {
+    // Signed subtraction is wrap-safe for intervals well below 2^31 ms.
+    if (static_cast<int32_t>(now - loginLockoutUntil) < 0) {
+      server.send(
+          429,
+          "text/html; charset=utf-8",
+          loginPage("<div class=warn>Zu viele Versuche. Bitte kurz warten.</div>"));
+      return;
+    }
+    loginLockoutUntil = 0;
+  }
+
+  if (lastLoginAttempt != 0 &&
+      !elapsed(now, lastLoginAttempt, Config::LOGIN_COOLDOWN_MS)) {
+    server.send(
+        429,
+        "text/html; charset=utf-8",
+        loginPage("<div class=warn>Bitte kurz warten.</div>"));
+    return;
+  }
+
+  lastLoginAttempt = now;
+
+  if (server.hasArg("pin") && server.arg("pin") == adminPin) {
+    loginFailures = 0;
+    loginLockoutUntil = 0;
+    sessionToken = makeToken();
+    setSessionCookie();
+    redirectAdmin();
+    return;
+  }
+
+  ++loginFailures;
+
+  if (loginFailures >= Config::MAX_LOGIN_FAILURES) {
+    loginFailures = 0;
+    loginLockoutUntil = now + Config::LOGIN_LOCKOUT_MS;
+  }
+
+  server.send(
+      403,
+      "text/html; charset=utf-8",
+      loginPage("<div class=warn>Falsche PIN.</div>"));
 }
-void aAddQ(){ if(!needAdmin())return; addQuote(server.arg("q"),server.arg("a")); goAdmin(); }
-void aDelQ(){ if(!needAdmin())return; delQuote((uint8_t)server.arg("i").toInt()); if(mode==MODE_QUOTE)drawQuote(); goAdmin(); }
-void aReset(){ if(!needAdmin())return; defaults(); currentQuote=random(quoteCount); if(mode==MODE_QUOTE){prepareQuote();drawQuote();} goAdmin(); }
-void aDelM(){ if(!needAdmin())return; delMsg((uint8_t)server.arg("i").toInt()); goAdmin(); }
-void aClear(){ if(!needAdmin())return; msgCount=0;unread=0;saveMsgs();goAdmin(); }
-void aLogout(){
-  if(!needAdmin())return;
-  server.sendHeader("Set-Cookie","AS=x; Path=/; Max-Age=0");
-  server.sendHeader("Location",ADMIN_PATH); server.send(303,"text/plain","");
+
+void adminNext() {
+  if (!requireAdmin()) return;
+  randomQuote();
+  if (mode == MODE_QUOTE) drawQuote();
+  redirectAdmin();
 }
-void portal(){ server.sendHeader("Location","http://10.77.0.1/"); server.send(302,"text/plain",""); }
 
+void adminSettings() {
+  if (!requireAdmin()) return;
 
-// ---------------- robust Wi-Fi AP startup ----------------
+  if (server.hasArg("qs")) {
+    quoteSpeed = constrain(server.arg("qs").toInt(), 10, 100);
+  }
+  if (server.hasArg("is")) {
+    ideaSpeed = constrain(server.arg("is").toInt(), 15, 110);
+  }
+  if (server.hasArg("dur")) {
+    minQuoteSeconds = constrain(server.arg("dur").toInt(), 3, 300);
+  }
+  if (server.hasArg("ct")) {
+    contrast = constrain(server.arg("ct").toInt(), 20, 255);
+  }
 
-bool startWiFiAP(){
-  // Start Wi-Fi before BLE. On the ESP32-C3 this gives the AP radio
-  // priority during initialization and makes startup more reliable.
+  u8g2.setContrast(contrast);
+  saveSettings();
+  redirectAdmin();
+}
+
+void adminAddQuote() {
+  if (!requireAdmin()) return;
+  addQuote(server.arg("q"), server.arg("a"));
+  redirectAdmin();
+}
+
+void adminDeleteQuote() {
+  if (!requireAdmin()) return;
+
+  uint8_t index;
+  if (!validIndexArg(server.arg("i"), quoteCount, index)) {
+    server.send(400, "text/plain; charset=utf-8", "Invalid index");
+    return;
+  }
+
+  deleteQuote(index);
+
+  if (mode == MODE_QUOTE) {
+    drawQuote();
+  }
+
+  redirectAdmin();
+}
+
+void adminResetQuotes() {
+  if (!requireAdmin()) return;
+
+  restoreDefaultQuotes();
+  currentQuote = random(quoteCount);
+
+  if (mode == MODE_QUOTE) {
+    prepareQuote();
+    drawQuote();
+  }
+
+  redirectAdmin();
+}
+
+void adminDeleteMessage() {
+  if (!requireAdmin()) return;
+
+  uint8_t index;
+  if (!validIndexArg(server.arg("i"), messageCount, index)) {
+    server.send(400, "text/plain; charset=utf-8", "Invalid index");
+    return;
+  }
+
+  deleteMessage(index);
+  redirectAdmin();
+}
+
+void adminClearMessages() {
+  if (!requireAdmin()) return;
+
+  messageCount = 0;
+  unread = 0;
+  saveMessages();
+  redirectAdmin();
+}
+
+void adminNewPin() {
+  if (!requireAdmin()) return;
+
+  String newPin = server.arg("newpin");
+  bool valid = newPin.length() == 6;
+
+  for (size_t i = 0; valid && i < newPin.length(); ++i) {
+    valid = isDigit(newPin[i]);
+  }
+
+  if (!valid) {
+    server.send(400, "text/plain; charset=utf-8", "PIN must be exactly 6 digits");
+    return;
+  }
+
+  adminPin = newPin;
+  prefs.putString("apin", adminPin);
+
+  // Invalidate all existing sessions after a PIN change.
+  sessionToken = makeToken();
+  setSessionCookie();
+  redirectAdmin();
+}
+
+void adminLogout() {
+  if (!requireAdmin()) return;
+
+  sessionToken = makeToken();
+  server.sendHeader("Set-Cookie", "AS=x; Path=/; Max-Age=0; HttpOnly; SameSite=Strict");
+  server.sendHeader("Location", Config::ADMIN_PATH);
+  server.send(303, "text/plain", "");
+}
+
+void captivePortalRedirect() {
+  server.sendHeader("Cache-Control", "no-store");
+  server.sendHeader("Location", "http://10.77.0.1/");
+  server.send(302, "text/plain", "");
+}
+
+// ---------------- Wi-Fi AP ----------------
+
+bool startWiFiAP() {
   WiFi.persistent(false);
   WiFi.mode(WIFI_OFF);
   delay(250);
@@ -485,39 +1124,41 @@ bool startWiFiAP(){
   WiFi.mode(WIFI_AP);
   delay(250);
 
-  WiFi.softAPConfig(AP_IP,AP_GW,AP_MASK);
+  if (!WiFi.softAPConfig(AP_IP, AP_GW, AP_MASK)) {
+    return false;
+  }
 
-  // Open 2.4 GHz AP, channel 1, visible SSID, max 4 clients.
-  bool ok=WiFi.softAP(WIFI_NAME,NULL,1,0,4);
+  bool ok = WiFi.softAP(Config::WIFI_NAME, nullptr, 1, 0, 4);
 
-  if(!ok){
+  if (!ok) {
     WiFi.mode(WIFI_OFF);
     delay(400);
     WiFi.mode(WIFI_AP);
     delay(250);
-    WiFi.softAPConfig(AP_IP,AP_GW,AP_MASK);
-    ok=WiFi.softAP(WIFI_NAME,NULL,6,0,4);
+
+    if (!WiFi.softAPConfig(AP_IP, AP_GW, AP_MASK)) {
+      return false;
+    }
+
+    ok = WiFi.softAP(Config::WIFI_NAME, nullptr, 6, 0, 4);
   }
 
-  if(ok){
+  if (ok) {
     WiFi.setSleep(false);
     delay(300);
 
-
-    // Brief startup confirmation on OLED so you know the AP really started.
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x12_tf);
-    center("WIFI READY",18);
-    center("Amir-Message",38);
-    center("10.77.0.1",57);
+    drawCentered("WIFI READY", 18);
+    drawCentered(Config::WIFI_NAME, 38);
+    drawCentered("10.77.0.1", 57);
     u8g2.sendBuffer();
-    delay(1400);
+    delay(1200);
   } else {
-
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x12_tf);
-    center("WIFI ERROR",26);
-    center("RESET BOARD",48);
+    drawCentered("WIFI ERROR", 26);
+    drawCentered("RESET BOARD", 48);
     u8g2.sendBuffer();
     delay(2500);
   }
@@ -525,75 +1166,116 @@ bool startWiFiAP(){
   return ok;
 }
 
-
 // ---------------- BLE ----------------
 
-void startBLE(){
-  BLEDevice::init(BLE_NAME);
-  BLEAdvertising* a=BLEDevice::getAdvertising();
-  a->setScanResponse(true);
-  a->start();
+void startBLE() {
+  BLEDevice::init(Config::BLE_NAME);
+
+  BLEAdvertising* advertising = BLEDevice::getAdvertising();
+  advertising->setScanResponse(true);
+  advertising->start();
+}
+
+// ---------------- first-run PIN ----------------
+
+void showAdminPinOnceIfNeeded() {
+  bool shownBefore = prefs.getBool("pinseen", false);
+
+  if (shownBefore) {
+    return;
+  }
+
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_6x12_tf);
+  drawCentered("ADMIN PIN", 14);
+
+  u8g2.setFont(u8g2_font_10x20_tf);
+  drawCentered(adminPin, 39);
+
+  u8g2.setFont(u8g2_font_6x12_tf);
+  drawCentered("save it now", 58);
+  u8g2.sendBuffer();
+
+  delay(12000);
+  prefs.putBool("pinseen", true);
 }
 
 // ---------------- setup / loop ----------------
 
-void setup(){
+void setup() {
   delay(250);
   randomSeed(esp_random());
 
-  prefs.begin("amir-lite",false);
-  loadSettings(); loadQuotes(); loadMsgs();
+  prefs.begin("amir-beacon", false);
+
+  loadSettings();
+  loadQuotes();
+  loadMessages();
+  loadOrCreateAdminPin();
 
   Wire.begin();
+
   u8g2.begin();
   u8g2.enableUTF8Print();
   u8g2.setContrast(contrast);
 
-  session=makeToken();
+  showAdminPinOnceIfNeeded();
 
-  // Start Wi-Fi first. This is more reliable on XIAO ESP32-C3.
-  bool wifiOK=startWiFiAP();
+  sessionToken = makeToken();
 
-  // BLE starts only after the Wi-Fi AP is already alive.
+  bool wifiReady = startWiFiAP();
+
+  // Start BLE only after Wi-Fi initialization for more reliable coexistence.
   startBLE();
 
-  if(wifiOK){
-    dns.start(53,"*",AP_IP);
+  if (wifiReady) {
+    dnsStarted = dns.start(53, "*", AP_IP);
   }
 
-  const char* hdr[]={"Cookie"};
-  server.collectHeaders(hdr,1);
+  const char* headers[] = {"Cookie"};
+  server.collectHeaders(headers, 1);
 
-  server.on("/",HTTP_GET,handleRoot);
-  server.on("/idea",HTTP_POST,handleIdea);
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/idea", HTTP_POST, handleIdea);
 
-  server.on(ADMIN_PATH,HTTP_GET,handleAdmin);
-  server.on(ADMIN_PATH,HTTP_POST,handleAdmin);
+  server.on(Config::ADMIN_PATH, HTTP_GET, handleAdmin);
+  server.on(Config::ADMIN_PATH, HTTP_POST, handleAdmin);
 
-  server.on("/admin/next",HTTP_POST,aNext);
-  server.on("/admin/settings",HTTP_POST,aSettings);
-  server.on("/admin/addq",HTTP_POST,aAddQ);
-  server.on("/admin/delq",HTTP_POST,aDelQ);
-  server.on("/admin/reset",HTTP_POST,aReset);
-  server.on("/admin/delm",HTTP_POST,aDelM);
-  server.on("/admin/clear",HTTP_POST,aClear);
-  server.on("/admin/logout",HTTP_POST,aLogout);
+  server.on("/admin/next", HTTP_POST, adminNext);
+  server.on("/admin/settings", HTTP_POST, adminSettings);
+  server.on("/admin/addq", HTTP_POST, adminAddQuote);
+  server.on("/admin/delq", HTTP_POST, adminDeleteQuote);
+  server.on("/admin/reset", HTTP_POST, adminResetQuotes);
+  server.on("/admin/delm", HTTP_POST, adminDeleteMessage);
+  server.on("/admin/clear", HTTP_POST, adminClearMessages);
+  server.on("/admin/newpin", HTTP_POST, adminNewPin);
+  server.on("/admin/logout", HTTP_POST, adminLogout);
 
-  server.on("/generate_204",HTTP_ANY,portal);
-  server.on("/hotspot-detect.html",HTTP_ANY,portal);
-  server.onNotFound(portal);
+  // Common captive-portal probes.
+  server.on("/generate_204", HTTP_ANY, captivePortalRedirect);       // Android
+  server.on("/gen_204", HTTP_ANY, captivePortalRedirect);            // Android variants
+  server.on("/hotspot-detect.html", HTTP_ANY, captivePortalRedirect);// Apple
+  server.on("/library/test/success.html", HTTP_ANY, captivePortalRedirect);
+  server.on("/connecttest.txt", HTTP_ANY, captivePortalRedirect);    // Windows
+  server.on("/ncsi.txt", HTTP_ANY, captivePortalRedirect);           // Windows
+  server.on("/redirect", HTTP_ANY, captivePortalRedirect);
+
+  server.onNotFound(captivePortalRedirect);
 
   server.begin();
 
-  currentQuote=random(quoteCount);
+  currentQuote = random(quoteCount);
   prepareQuote();
   drawQuote();
-
 }
 
-void loop(){
-  dns.processNextRequest();
+void loop() {
+  if (dnsStarted) {
+    dns.processNextRequest();
+  }
+
   server.handleClient();
   updateDisplay();
+
   delay(1);
 }
