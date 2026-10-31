@@ -1,0 +1,11 @@
+{
+  "core": "esp32:esp32@2.0.17",
+  "fqbn": "esp32:esp32:XIAO_ESP32C3:PartitionScheme=no_ota",
+  "libs": [
+    "U8g2@2.36.19"
+  ],
+  "sources": [
+    "AMIR_IDEA_BEACON.ino"
+  ],
+  "url": "https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json"
+}

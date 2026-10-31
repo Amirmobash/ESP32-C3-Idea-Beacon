@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="248" viewBox="0 0 1000 248" role="img" aria-labelledby="title desc">
+<title id="title">ESP32-C3 Idea Beacon signal assignments</title>
+<desc id="desc">Source and selected-board pin map. Power, voltage adaptation, protection and load circuits are not specified.</desc>
+<rect width="100%" height="100%" fill="#f8fafc"/>
+<text x="30" y="32" font-family="sans-serif" font-size="21" fill="#0f172a">Seeed Studio XIAO ESP32-C3</text>
+<text x="30" y="59" font-family="sans-serif" font-size="15" fill="#475569">Source-derived signal map; no claim of physical verification</text>
+<rect x="30" y="80" width="350" height="32" rx="5" fill="#dbeafe"/>
+<text x="42" y="102" font-family="sans-serif" font-size="16">D4 / GPIO6</text>
+<line x1="380" y1="96" x2="455" y2="96" stroke="#2563eb" stroke-width="2"/>
+<rect x="455" y="80" width="510" height="32" rx="5" fill="#e2e8f0"/>
+<text x="468" y="102" font-family="sans-serif" font-size="16">SH1106 SDA</text>
+<rect x="30" y="124" width="350" height="32" rx="5" fill="#dbeafe"/>
+<text x="42" y="146" font-family="sans-serif" font-size="16">D5 / GPIO7</text>
+<line x1="380" y1="140" x2="455" y2="140" stroke="#2563eb" stroke-width="2"/>
+<rect x="455" y="124" width="510" height="32" rx="5" fill="#e2e8f0"/>
+<text x="468" y="146" font-family="sans-serif" font-size="16">SH1106 SCL</text>
+<text x="30" y="218" font-family="sans-serif" font-size="14" fill="#475569">Power, level shifting, driver/protection circuits and load wiring require separate verification.</text>
+</svg>
